@@ -32,9 +32,25 @@ custom_minutes = DEFAULT_MINUTES
 mode = "collapsed"  # collapsed, expanded, input, alarm
 timer_window = None
 tray_icon = None
-last_window = None  # Global tracker
+last_window = None
+
 root = tk.Tk()
 root.withdraw()
+
+# === NEW: Toggle always-on-top for currently focused window
+def toggle_foreground_window_always_on_top():
+    hwnd = win32gui.GetForegroundWindow()
+    if hwnd:
+        # Check if already topmost
+        ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        is_topmost = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & win32con.WS_EX_TOPMOST
+
+        win32gui.SetWindowPos(
+            hwnd,
+            win32con.HWND_NOTOPMOST if is_topmost else win32con.HWND_TOPMOST,
+            0, 0, 0, 0,
+            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+        )
 
 # === FUNCTIONS ===
 def format_time(seconds):
@@ -70,7 +86,6 @@ def collapse_from_focus():
         show_collapsed_timer()
 
 def show_collapsed_timer():
-    print("Showing collapsed timer")
     global timer_window, mode
     mode = "collapsed"
 
@@ -100,7 +115,6 @@ def show_collapsed_timer():
     timer_window.bind("<FocusOut>", lambda e: collapse_from_focus())
 
 def show_expanded_timer():
-    print("Showing expanded timer")
     global timer_window, mode
     mode = "expanded"
     if timer_window:
@@ -151,17 +165,11 @@ def show_expanded_timer():
 def monitor_outside_clicks():
     def on_mouse_event(event):
         global timer_window, mode
-
-        # Only run if timer is expanded and fully built
         if mode != "expanded" or not timer_window:
             return
-
-        # Only respond to mouse down events, not moves or scrolls
         if not hasattr(event, "event_type") or event.event_type != "down":
             return
-
         try:
-            # Delay safety: Wait 200ms to ensure the window geometry is initialized
             root.after(200, check_click_position)
         except Exception as e:
             print("Click monitor error:", e)
@@ -170,7 +178,6 @@ def monitor_outside_clicks():
         global timer_window
         try:
             if not timer_window or not timer_window.winfo_exists():
-                print("Timer window doesn't exist — skipping click check.")
                 return
 
             x, y = mouse.get_position()
@@ -179,11 +186,7 @@ def monitor_outside_clicks():
             win_w = timer_window.winfo_width()
             win_h = timer_window.winfo_height()
 
-            print(f"Mouse clicked at ({x}, {y})")
-            print(f"Timer window bounds: x={win_x}-{win_x+win_w}, y={win_y}-{win_y+win_h}")
-
             if not (win_x <= x <= win_x + win_w and win_y <= y <= win_y + win_h):
-                print("Clicked outside expanded window — collapsing.")
                 show_collapsed_timer()
         except tk.TclError as e:
             print("Window check skipped:", e)
@@ -234,7 +237,6 @@ def show_input_box():
     entry.bind("<Escape>", cancel)
 
 def show_alarm():
-    print("Showing alarm window")
     global mode, timer_window
     mode = "alarm"
     if timer_window:
@@ -269,21 +271,14 @@ def update_spotify_volume():
 
 def force_focus(hwnd):
     try:
-        # Get current and target thread IDs
         fg_win = win32gui.GetForegroundWindow()
         current_thread = win32api.GetCurrentThreadId()
         target_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
         fg_thread = win32process.GetWindowThreadProcessId(fg_win)[0]
-
-        # Attach input so we can control foreground focus
         ctypes.windll.user32.AttachThreadInput(fg_thread, target_thread, True)
         ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, True)
-
-        # Show and focus
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
-
-        # Detach input control
         ctypes.windll.user32.AttachThreadInput(fg_thread, target_thread, False)
         ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, False)
     except Exception as e:
@@ -294,11 +289,9 @@ def get_foreground_hwnd():
 
 def toggle_chrome_netflix():
     global last_window
-
     try:
         chrome_windows = gw.getWindowsWithTitle('Netflix') or gw.getWindowsWithTitle('Chrome')
         if not chrome_windows:
-            print("No Chrome or Netflix window found.")
             return
 
         chrome_win = chrome_windows[0]
@@ -306,26 +299,20 @@ def toggle_chrome_netflix():
         is_minimized = chrome_win.isMinimized
         foreground = get_foreground_hwnd()
 
-        # CASE 1: Chrome is minimized → restore, bring front, send space
         if is_minimized:
-            print("Chrome is minimized. Restoring and sending space.")
-            force_focus(hwnd)
-            time.sleep(0.3)
-            keyboard.send('space')
-            last_window = foreground  # Remember what was in front before
-            return
-
-        # CASE 2: Chrome not focused → bring front, send space
-        if hwnd != foreground:
-            print("Bringing Chrome to front and sending space.")
             force_focus(hwnd)
             time.sleep(0.3)
             keyboard.send('space')
             last_window = foreground
             return
 
-        # CASE 3: Chrome is already in front → send space and minimize
-        print("Chrome already in front. Sending space and minimizing.")
+        if hwnd != foreground:
+            force_focus(hwnd)
+            time.sleep(0.3)
+            keyboard.send('space')
+            last_window = foreground
+            return
+
         keyboard.send('space')
         time.sleep(0.3)
         win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
@@ -337,7 +324,6 @@ def toggle_chrome_netflix():
 def restart_script():
     python = sys.executable
     os.execl(python, f'"{python}"', f'"{os.path.abspath(sys.argv[0])}"', *sys.argv[1:])
-    print("Restarting script now...")
 
 def exit_script():
     if tray_icon:
@@ -363,6 +349,7 @@ def setup_tray():
 def setup_hotkeys():
     keyboard.add_hotkey('f3', update_spotify_volume)
     keyboard.add_hotkey('f4', toggle_chrome_netflix)
+    keyboard.add_hotkey('alt+2', toggle_foreground_window_always_on_top)  # ⬅️ Added here
 
 # === MAIN ===
 if __name__ == "__main__":
@@ -372,6 +359,5 @@ if __name__ == "__main__":
     threading.Thread(target=setup_tray, daemon=True).start()
     setup_hotkeys()
     monitor_outside_clicks()
-
     show_collapsed_timer()
     root.mainloop()
